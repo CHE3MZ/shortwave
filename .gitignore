@@ -1,0 +1,4 @@
+temp/
+build/
+*.DS_Store
+*.exe
