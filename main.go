@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,14 +55,24 @@ var swBands = []swBand{
 	{21000, 21450, "usb"}, // 15m ham
 }
 
-// pickRandomFreq returns a random frequency (kHz) from a known band, clamped to
-// the receiver's tunable range so the resulting channel is always valid.
-func pickRandomFreq(maxKhz float64) (freq float64, mode string) {
+// voiceBands are ham SSB phone bands where live human speech is active daily.
+var voiceBands = []swBand{
+	{3600, 4000, "lsb"},   // 80m
+	{7125, 7300, "lsb"},   // 40m (best in the evening)
+	{14150, 14350, "usb"}, // 20m
+	{18110, 18168, "usb"}, // 17m
+	{21300, 21450, "usb"}, // 15m
+	{28300, 29700, "usb"}, // 10m
+}
+
+// pickFromBands returns a random frequency (kHz) from the given bands, clamped
+// to the receiver's tunable range so the resulting channel is always valid.
+func pickFromBands(bands []swBand, maxKhz float64) (freq float64, mode string) {
 	if maxKhz <= 0 {
 		maxKhz = 30000
 	}
 	for i := 0; i < 32; i++ {
-		b := swBands[rand.Intn(len(swBands))]
+		b := bands[rand.Intn(len(bands))]
 		if b.lo >= maxKhz {
 			continue
 		}
@@ -78,13 +90,48 @@ func pickRandomFreq(maxKhz float64) (freq float64, mode string) {
 	return math.Round(f*10) / 10, "am"
 }
 
+// pickRandomFreq picks a random frequency on a general shortwave band.
+func pickRandomFreq(maxKhz float64) (float64, string) { return pickFromBands(swBands, maxKhz) }
+
+// pickVoiceFreq picks a random ham SSB phone frequency, where you will most
+// likely hear live human speech.
+func pickVoiceFreq(maxKhz float64) (float64, string) { return pickFromBands(voiceBands, maxKhz) }
+
 type CLI struct {
 	Random bool     `kong:"optional,name='random',help='Pick a random public KiwiSDR server and a random valid frequency'"`
-	Mode   *string  `kong:"optional,short='m',help='Demodulation mode: am, amn, usb, usn, lsb, lsn, cw, cwn, nbfm, nnfm, sam (default am; auto-selected with --random)'"`
+	Voice  bool     `kong:"optional,name='voice',help='Tune to a random ham SSB phone frequency where people talk'"`
+	Mode   *string  `kong:"optional,short='m',help='Demodulation mode: am, amn, usb, usn, lsb, lsn, cw, cwn, nbfm, nnfm, sam (default am; auto-selected otherwise)'"`
 	Volume int      `kong:"optional,short='v',default='80',help='Volume 0-100'"`
 	Test   bool     `kong:"optional,name='test',help='Connect, verify the protocol, then exit (no audio)'"`
-	Server string   `kong:"arg,optional,help='KiwiSDR server, e.g. kiwisdr.ucsd.edu:8073'"`
-	Freq   *float64 `kong:"optional,short='f',help='Start frequency in kHz (default 10000; random with --random)'"`
+	Server string   `kong:"arg,optional,help='KiwiSDR server, e.g. kiwisdr.ucsd.edu:8073 (defaults to the last one used)'"`
+	Freq   *float64 `kong:"optional,short='f',help='Start frequency in kHz (default 10000; random with --random/--voice)'"`
+}
+
+// config persists the last server so it doesn't need to be typed each time.
+type config struct {
+	LastServer string  `json:"last_server,omitempty"`
+	LastFreq   float64 `json:"last_freq,omitempty"`
+	LastMode   string  `json:"last_mode,omitempty"`
+}
+
+func configPath() string {
+	return filepath.Join(".", ".shortwave.json")
+}
+
+func loadConfig() *config {
+	c := &config{}
+	b, err := os.ReadFile(configPath())
+	if err != nil {
+		return c
+	}
+	json.Unmarshal(b, c)
+	return c
+}
+
+func (c *config) save() {
+	if b, err := json.MarshalIndent(c, "", "  "); err == nil {
+		os.WriteFile(configPath(), b, 0o600)
+	}
 }
 
 type app struct {
@@ -116,34 +163,53 @@ func (a *app) statusText() string {
 	return s
 }
 
-// dialServer connects to the requested server, or to a random server from the
-// pool when --random is used (with a few retries for unreachable receivers).
-func dialServer(cli *CLI) (*KiwiClient, string, error) {
-	if !cli.Random || cli.Server != "" {
-		if cli.Server == "" {
-			return nil, "", fmt.Errorf("no server address given")
-		}
+// dialServer connects to the requested server, a random pool server (when
+// --random is used, avoiding the previous one), or the last-used server.
+func dialServer(cli *CLI, cfg *config) (*KiwiClient, string, error) {
+	// Explicit server always wins.
+	if cli.Server != "" {
 		c, err := Dial(cli.Server)
 		return c, normalizeServer(cli.Server), err
 	}
 
-	order := rand.Perm(len(serverPool))
-	var lastErr error
-	for i, idx := range order {
-		if i >= maxRandomTry {
-			break
+	// --random: try random pool servers, skipping the previous one.
+	if cli.Random {
+		pool := serverPool
+		filtered := make([]string, 0, len(pool))
+		for _, s := range pool {
+			if s != cfg.LastServer {
+				filtered = append(filtered, s)
+			}
 		}
-		srv := serverPool[idx]
-		fmt.Printf("trying random server %s ...\n", srv)
-		c, err := Dial(srv)
-		if err == nil {
-			fmt.Printf("connected to %s\n", srv)
-			return c, srv, nil
+		if len(filtered) == 0 {
+			filtered = pool
 		}
-		lastErr = err
-		fmt.Printf("  %s is unreachable: %v\n", srv, err)
+		order := rand.Perm(len(filtered))
+		var lastErr error
+		for i, idx := range order {
+			if i >= maxRandomTry {
+				break
+			}
+			srv := filtered[idx]
+			fmt.Printf("trying random server %s ...\n", srv)
+			c, err := Dial(srv)
+			if err == nil {
+				fmt.Printf("connected to %s\n", srv)
+				return c, srv, nil
+			}
+			lastErr = err
+			fmt.Printf("  %s is unreachable: %v\n", srv, err)
+		}
+		return nil, "", fmt.Errorf("no public server could be reached: %w", lastErr)
 	}
-	return nil, "", fmt.Errorf("no public server could be reached: %w", lastErr)
+
+	// Otherwise reuse the last-used server.
+	if cfg.LastServer != "" {
+		fmt.Printf("reconnecting to last server %s (use --random or an address to change)\n", cfg.LastServer)
+		c, err := Dial(cfg.LastServer)
+		return c, cfg.LastServer, err
+	}
+	return nil, "", fmt.Errorf("no server address given (use --random, an address, or run once with both)")
 }
 
 func main() {
@@ -159,11 +225,6 @@ func main() {
 		kong.UsageOnError(),
 	)
 
-	if cli.Server == "" && !cli.Random {
-		fmt.Fprintln(os.Stderr, "shortwave: no server address given (or use --random)")
-		fmt.Fprintln(os.Stderr, "try 'shortwave --help'")
-		os.Exit(1)
-	}
 	if cli.Volume < 0 {
 		cli.Volume = 0
 	}
@@ -171,11 +232,20 @@ func main() {
 		cli.Volume = 100
 	}
 
-	client, server, err := dialServer(&cli)
+	cfg := loadConfig()
+	if cli.Server == "" && !cli.Random && !cli.Voice && cfg.LastServer == "" {
+		fmt.Fprintln(os.Stderr, "shortwave: no server address given (or use --random)")
+		fmt.Fprintln(os.Stderr, "try 'shortwave --help'")
+		os.Exit(1)
+	}
+
+	client, server, err := dialServer(&cli, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "shortwave:", err)
 		os.Exit(1)
 	}
+	cfg.LastServer = server
+	cfg.save()
 	defer client.Close()
 
 	if cli.Test {
@@ -187,10 +257,14 @@ func main() {
 	mode := "am"
 	if cli.Mode != nil {
 		mode = *cli.Mode
+	} else if cfg.LastMode != "" {
+		mode = cfg.LastMode
 	}
 	freq := defaultFreq
 	if cli.Freq != nil {
 		freq = *cli.Freq
+	} else if cfg.LastFreq > 0 {
+		freq = cfg.LastFreq
 	}
 	if !isMode(mode) {
 		fmt.Fprintf(os.Stderr, "shortwave: unknown mode %q, using am\n", mode)
@@ -296,16 +370,23 @@ func main() {
 	a.mu.Unlock()
 	player.SetVolume(a.vol)
 
-	// With --random, pick a valid frequency within this receiver's range.
-	if cli.Random {
-		a.mu.Lock()
-		a.freq, a.mode = pickRandomFreq(client.MaxKhz)
+	// With --random/--voice, pick a valid frequency within this receiver's range.
+	a.mu.Lock()
+	if cli.Random || cli.Voice {
+		if cli.Voice {
+			a.freq, a.mode = pickVoiceFreq(client.MaxKhz)
+		} else {
+			a.freq, a.mode = pickRandomFreq(client.MaxKhz)
+		}
 		if cli.Mode != nil {
 			a.mode = *cli.Mode
 		}
-		a.mu.Unlock()
 		fmt.Printf("random: %s at %g kHz %s\n", server, a.freq, a.mode)
 	}
+	cfg.LastFreq = a.freq
+	cfg.LastMode = a.mode
+	a.mu.Unlock()
+	cfg.save()
 
 	if err := client.Tune(a.mode, a.freq); err != nil {
 		fmt.Fprintln(os.Stderr, "shortwave:", err)
