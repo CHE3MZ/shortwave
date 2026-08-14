@@ -99,15 +99,16 @@ func pickRandomFreq(maxKhz float64) (float64, string) { return pickFromBands(swB
 func pickVoiceFreq(maxKhz float64) (float64, string) { return pickFromBands(voiceBands, maxKhz) }
 
 type CLI struct {
-	Random bool     `kong:"optional,name='random',help='Pick a random public KiwiSDR server and a random valid frequency'"`
-	Voice  bool     `kong:"optional,name='voice',help='Tune to a random ham SSB phone frequency where people talk'"`
-	Scan   bool     `kong:"optional,name='scan',help='Sweep a band and list the strongest signals (no audio)'"`
-	Band   string   `kong:"optional,name='band',help='With --scan: range to sweep, e.g. --band 7100-7300'"`
-	Mode   *string  `kong:"optional,short='m',help='Demodulation mode: am, amn, usb, usn, lsb, lsn, cw, cwn, nbfm, nnfm, sam (default am; auto-selected otherwise)'"`
-	Volume int      `kong:"optional,short='v',default='80',help='Volume 0-100'"`
-	Test   bool     `kong:"optional,name='test',help='Connect, verify the protocol, then exit (no audio)'"`
-	Server string   `kong:"arg,optional,help='KiwiSDR server, e.g. kiwisdr.ucsd.edu:8073 (defaults to the last one used)'"`
-	Freq   *float64 `kong:"optional,short='f',help='Start frequency in kHz (default 10000; random with --random/--voice)'"`
+	Random  bool     `kong:"optional,name='random',help='Pick a random public KiwiSDR server and a random valid frequency'"`
+	Voice   bool     `kong:"optional,name='voice',help='Tune to a random ham SSB phone frequency where people talk'"`
+	Example bool     `kong:"optional,name='example',help='Just listen: 7222 kHz LSB at volume 25 (same as -f 7222 -m lsb -v 25)'"`
+	Scan    bool     `kong:"optional,name='scan',help='Sweep a band and list the strongest signals (no audio)'"`
+	Band    string   `kong:"optional,name='band',help='With --scan: range to sweep, e.g. --band 7100-7300'"`
+	Mode    *string  `kong:"optional,short='m',help='Demodulation mode: am, amn, usb, usn, lsb, lsn, cw, cwn, nbfm, nnfm, sam (default am; auto-selected otherwise)'"`
+	Volume  *int     `kong:"optional,short='v',help='Volume 0-100 (default 80)'"`
+	Test    bool     `kong:"optional,name='test',help='Connect, verify the protocol, then exit (no audio)'"`
+	Server  string   `kong:"arg,optional,help='KiwiSDR server, e.g. kiwisdr.ucsd.edu:8073 (defaults to the last one used)'"`
+	Freq    *float64 `kong:"optional,short='f',help='Start frequency in kHz (default 10000; random with --random/--voice)'"`
 }
 
 // config persists the last server so it doesn't need to be typed each time.
@@ -228,11 +229,17 @@ func main() {
 		kong.UsageOnError(),
 	)
 
-	if cli.Volume < 0 {
-		cli.Volume = 0
+	vol := 80
+	if cli.Volume != nil {
+		vol = *cli.Volume
+	} else if cli.Example {
+		vol = 25
 	}
-	if cli.Volume > 100 {
-		cli.Volume = 100
+	if vol < 0 {
+		vol = 0
+	}
+	if vol > 100 {
+		vol = 100
 	}
 
 	cfg := loadConfig()
@@ -261,15 +268,21 @@ func main() {
 	// Resolve starting mode and frequency (a random freq needs the server's
 	// reported range, so it's chosen after we learn the sample rate).
 	mode := "am"
-	if cli.Mode != nil {
+	switch {
+	case cli.Mode != nil:
 		mode = *cli.Mode
-	} else if cfg.LastMode != "" {
+	case cli.Example:
+		mode = "lsb"
+	case cfg.LastMode != "":
 		mode = cfg.LastMode
 	}
 	freq := defaultFreq
-	if cli.Freq != nil {
+	switch {
+	case cli.Freq != nil:
 		freq = *cli.Freq
-	} else if cfg.LastFreq > 0 {
+	case cli.Example:
+		freq = 7222
+	case cfg.LastFreq > 0:
 		freq = cfg.LastFreq
 	}
 	if !isMode(mode) {
@@ -280,7 +293,7 @@ func main() {
 	a := &app{
 		freq: freq,
 		mode: mode,
-		vol:  cli.Volume,
+		vol:  vol,
 	}
 	a.client = client
 
