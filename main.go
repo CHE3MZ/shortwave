@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,6 +101,8 @@ func pickVoiceFreq(maxKhz float64) (float64, string) { return pickFromBands(voic
 type CLI struct {
 	Random bool     `kong:"optional,name='random',help='Pick a random public KiwiSDR server and a random valid frequency'"`
 	Voice  bool     `kong:"optional,name='voice',help='Tune to a random ham SSB phone frequency where people talk'"`
+	Scan   bool     `kong:"optional,name='scan',help='Sweep a band and list the strongest signals (no audio)'"`
+	Band   string   `kong:"optional,name='band',help='With --scan: range to sweep, e.g. --band 7100-7300'"`
 	Mode   *string  `kong:"optional,short='m',help='Demodulation mode: am, amn, usb, usn, lsb, lsn, cw, cwn, nbfm, nnfm, sam (default am; auto-selected otherwise)'"`
 	Volume int      `kong:"optional,short='v',default='80',help='Volume 0-100'"`
 	Test   bool     `kong:"optional,name='test',help='Connect, verify the protocol, then exit (no audio)'"`
@@ -250,6 +253,9 @@ func main() {
 
 	if cli.Test {
 		os.Exit(runTest(client, cli))
+	}
+	if cli.Scan {
+		os.Exit(runScan(client, cli))
 	}
 
 	// Resolve starting mode and frequency (a random freq needs the server's
@@ -495,6 +501,146 @@ func (a *app) tune(f float64) {
 	if err := a.client.Tune(mode, f); err != nil {
 		fmt.Fprintln(os.Stderr, "shortwave:", err)
 	}
+}
+
+// scanHit is one measured peak during a --scan sweep.
+type scanHit struct {
+	freq float64
+	sig  int
+}
+
+const (
+	scanDwell       = 400 * time.Millisecond
+	scanStepDefault = 5.0 // kHz, multi-band scan
+	scanStepBand    = 2.5 // kHz, single --band scan
+)
+
+// scanSegments returns the (mode, lo, hi) ranges to sweep, plus the step.
+func scanSegments(cli CLI) ([]swBand, float64) {
+	if cli.Band != "" {
+		parts := strings.SplitN(cli.Band, "-", 2)
+		if len(parts) == 2 {
+			lo, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+			hi, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+			if err1 == nil && err2 == nil && hi > lo && lo >= 0 {
+				return []swBand{{lo: lo, hi: hi, mode: "am"}}, scanStepBand
+			}
+		}
+		fmt.Fprintln(os.Stderr, "shortwave: bad --band value (want lo-hi in kHz, e.g. 7100-7300)")
+		os.Exit(1)
+	}
+	return voiceBands, scanStepDefault
+}
+
+// runScan sweeps a band, measuring the signal meter at each step, then prints
+// the strongest signals. No audio output is needed.
+func runScan(client *KiwiClient, cli CLI) int {
+	rateCh := make(chan int, 1)
+	errCh := make(chan error, 1)
+	client.OnRate = func(r int) {
+		select {
+		case rateCh <- r:
+		default:
+		}
+	}
+	client.OnError = func(e error) {
+		select {
+		case errCh <- e:
+		default:
+		}
+	}
+
+	var sigMu sync.Mutex
+	var sigBuf []int
+	client.OnSmeter = func(s int) {
+		sigMu.Lock()
+		sigBuf = append(sigBuf, s)
+		sigMu.Unlock()
+	}
+
+	client.Start()
+	if err := client.Auth(); err != nil {
+		fmt.Fprintln(os.Stderr, "shortwave:", err)
+		return 1
+	}
+
+	var rate int
+	select {
+	case rate = <-rateCh:
+	case err := <-errCh:
+		fmt.Fprintln(os.Stderr, "shortwave:", err)
+		return 1
+	case <-time.After(30 * time.Second):
+		fmt.Fprintln(os.Stderr, "shortwave: timed out waiting for the server")
+		return 1
+	}
+	client.SetAgc()
+	client.ArOk(rate, int(outRate))
+
+	segments, step := scanSegments(cli)
+	total := expectedSteps(segments, step)
+	fmt.Printf("scanning for active signals ... (step %.1f kHz, ~%.0fs total)\n", step,
+		float64(scanDwell.Milliseconds())/1000*float64(total))
+
+	start := time.Now()
+	var hits []scanHit
+	for _, seg := range segments {
+		mode := seg.mode
+		if cli.Mode != nil {
+			mode = *cli.Mode
+		}
+		fmt.Printf("\n%s band %.0f-%.0f kHz:\n", strings.ToUpper(mode), seg.lo, seg.hi)
+		steps := 0
+		for f := seg.lo; f <= seg.hi; f += step {
+			if err := client.Tune(mode, f); err != nil {
+				fmt.Fprintln(os.Stderr, "shortwave:", err)
+				return 1
+			}
+			sigMu.Lock()
+			sigBuf = sigBuf[:0]
+			sigMu.Unlock()
+			time.Sleep(scanDwell)
+
+			sigMu.Lock()
+			peak := 0
+			for _, s := range sigBuf {
+				if s > peak {
+					peak = s
+				}
+			}
+			sigMu.Unlock()
+
+			hits = append(hits, scanHit{freq: f, sig: peak})
+			steps++
+			if steps%50 == 0 {
+				fmt.Printf("\r  ... %6.1f kHz", f)
+			}
+		}
+		fmt.Println()
+	}
+
+	// Sort by signal strength, show the top 30.
+	sort.Slice(hits, func(i, j int) bool { return hits[i].sig > hits[j].sig })
+	fmt.Printf("\nstrongest signals (of %d frequencies scanned in %s):\n", len(hits),
+		time.Since(start).Round(time.Second))
+	shown := 0
+	for _, h := range hits {
+		if h.sig <= 0 || shown >= 30 {
+			continue
+		}
+		dBm := float64(h.sig)/10 - 127
+		fmt.Printf("  %7.1f kHz  sig=%4d  ~%6.1f dBm\n", h.freq, h.sig, dBm)
+		shown++
+	}
+	return 0
+}
+
+func expectedSteps(segments []swBand, step float64) int {
+	n := 0
+	for _, s := range segments {
+		n += int((s.hi - s.lo) / step)
+	}
+	return n
 }
 
 // runTest connects, authenticates, tunes, and verifies audio frames arrive,
