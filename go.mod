@@ -1,4 +1,4 @@
-module shortwave
+module github.com/CHE3MZ/shortwave
 
 go 1.26.3
 
