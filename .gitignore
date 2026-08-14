@@ -2,4 +2,5 @@ temp/
 build/
 *.DS_Store
 *.exe
+*.exe~
 .shortwave.json
