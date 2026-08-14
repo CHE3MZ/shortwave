@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	version      = "0.1.0"
 	defaultFreq  = 10000.0 // kHz, ~10 MHz SW band
 	stepBig      = 5.0     // kHz, +/- keys
 	maxRandomTry = 3       // attempts when --random picks a server
@@ -106,6 +107,7 @@ type CLI struct {
 	Band    string   `kong:"optional,name='band',help='With --scan: range to sweep, e.g. --band 7100-7300'"`
 	Mode    *string  `kong:"optional,short='m',help='Demodulation mode: am, amn, usb, usn, lsb, lsn, cw, cwn, nbfm, nnfm, sam (default am; auto-selected otherwise)'"`
 	Volume  *int     `kong:"optional,short='v',help='Volume 0-100 (default 80)'"`
+	Version bool     `kong:"optional,name='version',help='Show version and exit'"`
 	Test    bool     `kong:"optional,name='test',help='Connect, verify the protocol, then exit (no audio)'"`
 	Server  string   `kong:"arg,optional,help='KiwiSDR server, e.g. kiwisdr.ucsd.edu:8073 (defaults to the last one used)'"`
 	Freq    *float64 `kong:"optional,short='f',help='Start frequency in kHz (default 10000; random with --random/--voice)'"`
@@ -253,8 +255,12 @@ func main() {
 		kong.UsageOnError(),
 	)
 
-	if cli.Example != nil && *cli.Example != 1 && *cli.Example != 2 {
-		fmt.Fprintf(os.Stderr, "shortwave: unknown --example value %d (valid: 1, 2)\n", *cli.Example)
+	if cli.Version {
+		fmt.Printf("shortwave %s\n", version)
+		os.Exit(0)
+	}
+	if cli.Example != nil && *cli.Example != 1 && *cli.Example != 2 && *cli.Example != 3 {
+		fmt.Fprintf(os.Stderr, "shortwave: unknown --example value %d (valid: 1 , 2 , 3)\n", *cli.Example)
 		os.Exit(1)
 	}
 
@@ -268,6 +274,8 @@ func main() {
 			exFreq, exMode, exVol = 7222, "lsb", 25
 		case 2:
 			exFreq, exMode, exVol = 1010, "lsb", 25
+		case 3:
+			exFreq, exMode, exVol = 1030, "lsb", 25
 		}
 	}
 
