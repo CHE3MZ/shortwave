@@ -101,7 +101,7 @@ func pickVoiceFreq(maxKhz float64) (float64, string) { return pickFromBands(voic
 type CLI struct {
 	Random  bool     `kong:"optional,name='random',help='Pick a random public KiwiSDR server and a random valid frequency'"`
 	Voice   bool     `kong:"optional,name='voice',help='Tune to a random ham SSB phone frequency where people talk'"`
-	Example bool     `kong:"optional,name='example',help='Just listen: 7222 kHz LSB at volume 25 (same as -f 7222 -m lsb -v 25)'"`
+	Example *int     `kong:"optional,name='example',help='Listen to a preset: 1 = 7222 kHz LSB @ vol 25 (default), 2 = 1010 kHz LSB @ vol 25'"`
 	Scan    bool     `kong:"optional,name='scan',help='Sweep a band and list the strongest signals (no audio)'"`
 	Band    string   `kong:"optional,name='band',help='With --scan: range to sweep, e.g. --band 7100-7300'"`
 	Mode    *string  `kong:"optional,short='m',help='Demodulation mode: am, amn, usb, usn, lsb, lsn, cw, cwn, nbfm, nnfm, sam (default am; auto-selected otherwise)'"`
@@ -109,6 +109,27 @@ type CLI struct {
 	Test    bool     `kong:"optional,name='test',help='Connect, verify the protocol, then exit (no audio)'"`
 	Server  string   `kong:"arg,optional,help='KiwiSDR server, e.g. kiwisdr.ucsd.edu:8073 (defaults to the last one used)'"`
 	Freq    *float64 `kong:"optional,short='f',help='Start frequency in kHz (default 10000; random with --random/--voice)'"`
+}
+
+// normalizeArgs lets "--example" work bare as well as with a value:
+// "--example" (no value) becomes "--example=1"; "--example 2" is left alone.
+func normalizeArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--example" {
+			if i+1 < len(args) {
+				if _, err := strconv.Atoi(args[i+1]); err == nil {
+					out = append(out, a)
+					continue
+				}
+			}
+			out = append(out, "--example=1")
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // config persists the last server so it doesn't need to be typed each time.
@@ -217,6 +238,7 @@ func dialServer(cli *CLI, cfg *config) (*KiwiClient, string, error) {
 }
 
 func main() {
+	os.Args = append([]string{os.Args[0]}, normalizeArgs(os.Args[1:])...)
 	var cli CLI
 	kong.Parse(&cli,
 		kong.Name("shortwave"),
@@ -224,16 +246,36 @@ func main() {
 			"Usage:\n  shortwave [<server>] [flags]\n\n"+
 			"While listening:  q quit, +/- step 5 kHz, 1/2 step 1 kHz, <number> tune to kHz,\n"+
 			"  m <mode> change mode, v <0-100> volume, ? status\n"+
+			"\n--example presets:\n  --example 1   ->   -f 7222 -m lsb -v 25\n"+
+			"  --example 2   ->   -f 1010 -m lsb -v 25\n"+
 			"\nExamples:\n  shortwave alg.twrmon.net:8073 -f 9650 -m am\n"+
 			"  shortwave --random --volume 50"),
 		kong.UsageOnError(),
 	)
 
+	if cli.Example != nil && *cli.Example != 1 && *cli.Example != 2 {
+		fmt.Fprintf(os.Stderr, "shortwave: unknown --example value %d (valid: 1, 2)\n", *cli.Example)
+		os.Exit(1)
+	}
+
+	// --example presets.
+	var exFreq float64
+	exMode := ""
+	exVol := 0
+	if cli.Example != nil {
+		switch *cli.Example {
+		case 1:
+			exFreq, exMode, exVol = 7222, "lsb", 25
+		case 2:
+			exFreq, exMode, exVol = 1010, "lsb", 25
+		}
+	}
+
 	vol := 80
 	if cli.Volume != nil {
 		vol = *cli.Volume
-	} else if cli.Example {
-		vol = 25
+	} else if cli.Example != nil {
+		vol = exVol
 	}
 	if vol < 0 {
 		vol = 0
@@ -271,8 +313,8 @@ func main() {
 	switch {
 	case cli.Mode != nil:
 		mode = *cli.Mode
-	case cli.Example:
-		mode = "lsb"
+	case cli.Example != nil:
+		mode = exMode
 	case cfg.LastMode != "":
 		mode = cfg.LastMode
 	}
@@ -280,8 +322,8 @@ func main() {
 	switch {
 	case cli.Freq != nil:
 		freq = *cli.Freq
-	case cli.Example:
-		freq = 7222
+	case cli.Example != nil:
+		freq = exFreq
 	case cfg.LastFreq > 0:
 		freq = cfg.LastFreq
 	}
