@@ -480,13 +480,15 @@ func main() {
 	}()
 	defer close(statusDone)
 
-	// Watch for connection errors in the background.
+	// Watch for connection errors in the background. Exit so a dropped
+	// connection doesn't leave us hanging on a stdin read.
 	watchDone := make(chan struct{})
 	go func() {
 		select {
 		case err := <-errCh:
 			fmt.Fprintf(os.Stderr, "\nshortwave: connection lost: %v\n", err)
-			cancel()
+			time.Sleep(300 * time.Millisecond)
+			os.Exit(1)
 		case <-watchDone:
 		}
 	}()
@@ -495,10 +497,10 @@ func main() {
 	fmt.Println()
 	fmt.Println(a.statusText())
 	fmt.Println("commands: q quit | +/- 5kHz | 1/2 1kHz | <number> kHz | m <mode> | v <0-100> | ? status")
-	interactive(&cli, a, ctx)
+	interactive(a, ctx)
 }
 
-func interactive(cli *CLI, a *app, ctx context.Context) {
+func interactive(a *app, ctx context.Context) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		select {

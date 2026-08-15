@@ -102,7 +102,7 @@ func Dial(server string) (*KiwiClient, error) {
 		}
 		for _, withOrigin := range []bool{true, false} {
 			hdr := http.Header{}
-			hdr.Set("User-Agent", "shortwave/0.1")
+			hdr.Set("User-Agent", "shortwave/"+version)
 			if withOrigin {
 				hdr.Set("Origin", scheme+"://"+host)
 			}
