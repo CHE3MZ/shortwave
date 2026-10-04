@@ -1,58 +1,14 @@
-# gitagger config — edit me, then just run `gitagger`.
-# Everything is optional. Flags beat config, config beats defaults.
-# Run gitagger handbook to view the full handbook for the gitagger config!
-
-# Tag size for triple/double/single styles.
-# major | minor | patch
 scale: patch
-
-# Flavor appended to the tag. stable = no suffix.
-# stable | rc | beta | build | nightly
 pre: stable
-
-# Tag style. auto follows your tag history.
-# auto | triple | double | single | date | sha | sha-num
 format: auto
-
-# Custom tag template. Only used when format is custom above.
-# API: MAJOR MINOR PATCH YEAR MONTH DAY DATE SHA FULLSHA COUNT PRE NUMBER TAG
-# EXAMPLE: "build-<SHA>-v<MAJOR>.<MINOR>.<PATCH>-<DATE><PRE>"
 custom: ""
-
-# Push target. Must exist for auto-push to happen.
 remote: origin
-
-# Auto-push the new tag when the remote is reachable.
-# true = push, false = keep the tag local (same as -n).
 push: true
-
-# Always overwrite clashing tags and force-push them.
-# true = same as -f on every run. Keep false unless you mean it.
 force: false
-
-# Abort instead of tagging when the working tree is dirty.
 require_clean: false
-
-# Run a doctor check before creating the tag.
-# Aborts early if the remote already has the next tag.
 doctor: false
-
-# Show detection details and the plan while working.
-# true = same as -v on every run.
 verbose: false
-
-# Tag message. Empty = lightweight tag, set = annotated tag.
 message: ""
-
-# Hooks run shell commands at lifecycle events: start, success etc.
-# Each event takes one block or a list. shell defaults to sh, os defaults to all.
-# API: on:, start:, success:, failure:, finish:, run:, shell:, os:, argument:
-# EVENTS: start:, success:, failure:, finish: - determine when to run the hook.
-# SHELLS: sh, bash, pwsh, batch - determine what shell type to run the command on.
-# OS: windows, macos, linux - determine what OS type to run the command on.
-# ARGS: you can make Blocks take argument: <name> to run only with gitagger -a <name>.
-# ARGS: use argument: none to prevent a block from running when no arguments are used.
-# ARGS: use argument: any to make a block run, only when an argument is used.
 on:
   failure:
     - shell: sh

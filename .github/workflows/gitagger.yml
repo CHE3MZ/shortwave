@@ -1,0 +1,33 @@
+name: Gitagger
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Tag bump type'
+        required: false
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # env:
+    #   GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - uses: CHE3MZ/gitagger@v1
+        with:
+          args: ${{ inputs.bump }}
