@@ -1,6 +1,6 @@
 name: Release
 
-on: 
+on:
   push:
     tags:
       - 'v*'
@@ -10,12 +10,13 @@ permissions:
   contents: write
 
 jobs:
-  GoReleaser:
+  goreleaser:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
