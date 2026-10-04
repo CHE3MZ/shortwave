@@ -8,10 +8,6 @@ import (
 	"path/filepath"
 )
 
-// legacyName is the pre-0.2 config file kept in the working directory.
-// It is still read as a fallback so existing installs migrate silently.
-const legacyName = ".shortwave.json"
-
 // Config is the persisted user state.
 type Config struct {
 	LastServer string  `json:"last_server,omitempty"`
@@ -19,31 +15,21 @@ type Config struct {
 	LastMode   string  `json:"last_mode,omitempty"`
 }
 
-// Path returns the config file location, preferring the OS user-config dir
-// and falling back to the working directory when it is unavailable.
+// Path returns the config file location in the OS user-config dir,
+// falling back to the working directory only when it is unavailable
+// (practically never on supported platforms).
 func Path() string {
 	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
 		return filepath.Join(dir, "shortwave", "config.json")
 	}
-	return filepath.Join(".", legacyName)
+	return filepath.Join(".", "shortwave-config.json")
 }
 
-// legacyPath is the old working-directory config file.
-func legacyPath() string {
-	return filepath.Join(".", legacyName)
-}
-
-// Load reads stored state. It checks the new location first, then the legacy
-// working-directory file, and returns an empty Config when neither exists.
+// Load reads stored state, returning an empty Config when none exists.
+// Nothing requires the file to exist: callers treat empty as "ask once".
 func Load() *Config {
 	c := &Config{}
 	if b, err := os.ReadFile(Path()); err == nil {
-		_ = json.Unmarshal(b, c) // corrupt config falls back to defaults
-		if c.LastServer != "" || c.LastFreq != 0 || c.LastMode != "" {
-			return c
-		}
-	}
-	if b, err := os.ReadFile(legacyPath()); err == nil {
 		_ = json.Unmarshal(b, c) // corrupt config falls back to defaults
 	}
 	return c

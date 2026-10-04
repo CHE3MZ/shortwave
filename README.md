@@ -45,8 +45,10 @@ shortwave --no-color                 # plain output for pipes/logs
 
 Run `shortwave` with no arguments to reconnect to the last receiver you used.
 State is saved to your OS config dir (`%AppData%\shortwave\config.json` on
-Windows, `~/.config/shortwave/config.json` elsewhere); an old `.shortwave.json`
-in the working directory is still read once and migrated.
+Windows, `~/.config/shortwave/config.json` elsewhere) after the first
+successful connection — nothing needs to exist beforehand. If a stale
+`.shortwave.json` sits in your working directory from an older version,
+delete it; it is no longer read.
 
 ### Interactive keys (while listening)
 
