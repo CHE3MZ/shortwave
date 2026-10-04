@@ -1,5 +1,7 @@
 temp/
 build/
+log/
+dist/
 *.DS_Store
 *.exe
 *.exe~
