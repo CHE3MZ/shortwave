@@ -1,7 +1,9 @@
 temp/
 build/
-log/
 dist/
+log/
+logs/
+/shortwave
 *.DS_Store
 *.exe
 *.exe~

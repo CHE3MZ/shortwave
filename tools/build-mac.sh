@@ -1,2 +1,2 @@
-go build -o shortwave .
+go build -o shortwave ./cmd/shortwave
 exit
